@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
+// ─── CONFIG BACKEND ────────────────────────────────────────────────────────────
+const API_URL = "https://spinning-backend-production.up.railway.app";
+const SOCKET_URL = "https://spinning-backend-production.up.railway.app";
+
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 const WHEEL_CONFIGS = [
   { id: 1, label: "1/2", slots: 2, odds: "50%", color: "#22c55e" },
@@ -25,15 +29,7 @@ function generateId() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-function generateBots(count) {
-  const names = ["CryptoKing","LuckyAce","WheelMaster","BigBet","GoldRush","NeonRider","StarDust","IronFist","SilverFox","DiamondHands"];
-  return Array.from({ length: count }, (_, i) => ({
-    id: "bot_" + i,
-    pseudo: names[i % names.length] + Math.floor(Math.random()*99),
-    isBot: true,
-    avatar: COLORS[i % COLORS.length],
-  }));
-}
+
 
 // ─── WHEEL CANVAS ─────────────────────────────────────────────────────────────
 function WheelCanvas({ participants, spinning, winnerIndex, onDone }) {
@@ -49,768 +45,606 @@ function WheelCanvas({ participants, spinning, winnerIndex, onDone }) {
     color: COLORS[i % COLORS.length],
   }));
 
-  const drawWheel = useCallback((angle) => {
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
-    const r = cx - 10;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const cx = canvas.width / 2, cy = canvas.height / 2, r = cx - 8;
 
-    let startAngle = angle;
-    segments.forEach((seg) => {
-      const sliceAngle = seg.pct * 2 * Math.PI;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.arc(cx, cy, r, startAngle, startAngle + sliceAngle);
-      ctx.closePath();
-      ctx.fillStyle = seg.color;
-      ctx.fill();
-      ctx.strokeStyle = "#0f172a";
-      ctx.lineWidth = 2;
-      ctx.stroke();
+    function draw(angle) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      let start = angle;
+      segments.forEach((seg) => {
+        const sweep = seg.pct * 2 * Math.PI;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, r, start, start + sweep);
+        ctx.closePath();
+        ctx.fillStyle = seg.color;
+        ctx.fill();
+        ctx.strokeStyle = "#0f172a";
+        ctx.lineWidth = 2;
+        ctx.stroke();
 
-      // label
-      if (seg.pct > 0.04) {
         ctx.save();
         ctx.translate(cx, cy);
-        ctx.rotate(startAngle + sliceAngle / 2);
+        ctx.rotate(start + sweep / 2);
         ctx.textAlign = "right";
         ctx.fillStyle = "#fff";
-        ctx.font = "bold 12px 'DM Sans', sans-serif";
+        ctx.font = `bold ${Math.max(9, Math.min(13, 120 / segments.length))}px sans-serif`;
         ctx.fillText(seg.label.slice(0, 10), r - 8, 4);
         ctx.restore();
-      }
-      startAngle += sliceAngle;
-    });
-
-    // center circle
-    ctx.beginPath();
-    ctx.arc(cx, cy, 22, 0, 2 * Math.PI);
-    ctx.fillStyle = "#0f172a";
-    ctx.fill();
-    ctx.strokeStyle = "#334155";
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
-    // pointer
-    ctx.beginPath();
-    ctx.moveTo(canvas.width - 6, cy - 12);
-    ctx.lineTo(canvas.width - 6, cy + 12);
-    ctx.lineTo(canvas.width - 32, cy);
-    ctx.closePath();
-    ctx.fillStyle = "#f8fafc";
-    ctx.fill();
-  }, [segments]);
-
-  useEffect(() => {
-    if (!spinning) {
-      drawWheel(0);
-      return;
+        start += sweep;
+      });
+      // Needle
+      ctx.beginPath();
+      ctx.moveTo(cx + r + 4, cy);
+      ctx.lineTo(cx + r - 14, cy - 8);
+      ctx.lineTo(cx + r - 14, cy + 8);
+      ctx.fillStyle = "#fbbf24";
+      ctx.fill();
     }
-    const totalTickets = participants.reduce((s, p) => s + p.tickets, 0);
-    let cumulative = 0;
-    for (let i = 0; i < winnerIndex; i++) cumulative += participants[i].tickets;
-    const winnerMid = (cumulative + participants[winnerIndex].tickets / 2) / totalTickets;
-    // We want pointer (at 0 rad = right) to land at winnerMid
-    const targetAngle = -winnerMid * 2 * Math.PI + Math.PI; // offset so pointer hits winner
 
+    if (!spinning) { draw(angleRef.current); return; }
+
+    const target = winnerIndex !== null
+      ? (() => {
+          let acc = 0;
+          for (let i = 0; i < winnerIndex; i++) acc += segments[i].pct * 2 * Math.PI;
+          return acc + segments[winnerIndex].pct * Math.PI;
+        })()
+      : 0;
+
+    const fullSpins = 5 * 2 * Math.PI;
+    const finalAngle = fullSpins - target;
     const duration = 4000;
-    const spins = 5;
-    const start = performance.now();
-    const startA = angleRef.current;
+    const startTime = performance.now();
+    const startAngle = angleRef.current;
 
-    const animate = (now) => {
-      const t = Math.min((now - start) / duration, 1);
-      const ease = 1 - Math.pow(1 - t, 4);
-      const currentAngle = startA + (spins * 2 * Math.PI + targetAngle - startA) * ease;
-      angleRef.current = currentAngle;
-      drawWheel(currentAngle);
-      if (t < 1) {
-        animRef.current = requestAnimationFrame(animate);
-      } else {
-        onDone && onDone();
-      }
-    };
-    animRef.current = requestAnimationFrame(animate);
+    function easeOut(t) { return 1 - Math.pow(1 - t, 4); }
+
+    function frame(now) {
+      const t = Math.min((now - startTime) / duration, 1);
+      angleRef.current = startAngle + easeOut(t) * finalAngle;
+      draw(angleRef.current);
+      if (t < 1) animRef.current = requestAnimationFrame(frame);
+      else { angleRef.current = angleRef.current % (2 * Math.PI); onDone && onDone(); }
+    }
+    animRef.current = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(animRef.current);
-  }, [spinning]);
+  }, [spinning, winnerIndex]);
 
   useEffect(() => {
-    if (!spinning) drawWheel(angleRef.current);
-  }, [segments]);
+    const canvas = canvasRef.current;
+    if (!canvas || spinning) return;
+    const ctx = canvas.getContext("2d");
+    const cx = canvas.width / 2, cy = canvas.height / 2, r = cx - 8;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    let start = angleRef.current;
+    segments.forEach((seg) => {
+      const sweep = seg.pct * 2 * Math.PI;
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, start, start + sweep);
+      ctx.closePath(); ctx.fillStyle = seg.color; ctx.fill();
+      ctx.strokeStyle = "#0f172a"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(start + sweep / 2);
+      ctx.textAlign = "right"; ctx.fillStyle = "#fff";
+      ctx.font = `bold ${Math.max(9, Math.min(13, 120 / segments.length))}px sans-serif`;
+      ctx.fillText(seg.label.slice(0, 10), r - 8, 4); ctx.restore();
+      start += sweep;
+    });
+    ctx.beginPath(); ctx.moveTo(cx + r + 4, cy);
+    ctx.lineTo(cx + r - 14, cy - 8); ctx.lineTo(cx + r - 14, cy + 8);
+    ctx.fillStyle = "#fbbf24"; ctx.fill();
+  }, [participants]);
 
-  return (
-    <div style={{ position: "relative", display: "inline-block" }}>
-      <canvas ref={canvasRef} width={300} height={300} style={{ borderRadius: "50%", boxShadow: "0 0 40px rgba(99,102,241,0.3)" }} />
-    </div>
-  );
+  return <canvas ref={canvasRef} width={320} height={320} style={{ borderRadius: "50%" }} />;
 }
 
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+// ─── MAIN APP ────────────────────────────────────────────────────────────────
 export default function App() {
-  const [screen, setScreen] = useState("auth"); // auth | lobby | game | chat | wallet | friends
+  // Auth
+  const [token, setToken] = useState(() => localStorage.getItem("spinning_token") || null);
+  const [user, setUser] = useState(() => { try { return JSON.parse(localStorage.getItem("spinning_user")); } catch { return null; } });
   const [authMode, setAuthMode] = useState("login");
-  const [users, setUsers] = useState([
-    { id: "demo", pseudo: "DemoUser", password: "demo123", balance: 1000, friends: [], history: [] },
-  ]);
-  const [currentUser, setCurrentUser] = useState(null);
-  const [authForm, setAuthForm] = useState({ pseudo: "DemoUser", password: "demo123", confirm: "" });
+  const [authForm, setAuthForm] = useState({ pseudo: "DemoUser", password: "demo123" });
   const [authError, setAuthError] = useState("");
 
-  // Game state
-  const [selectedWheel, setSelectedWheel] = useState(null);
-  const [selectedBet, setSelectedBet] = useState(null);
-  const [ticketCount, setTicketCount] = useState(1);
-  const [activeGames, setActiveGames] = useState({});
-  const [pityCounters, setPityCounters] = useState({}); // key: wheelId_betAmount → loss streak
-  const [gameResult, setGameResult] = useState(null);
-  const [spinning, setSpinning] = useState(false);
-  const [winnerIdx, setWinnerIdx] = useState(0);
-  const [waitingCountdown, setWaitingCountdown] = useState(null); // seconds remaining before spin
+  // Navigation
+  const [page, setPage] = useState("lobby"); // lobby | game | wallet | friends | chat
 
-  // Pre-populate some random active games on mount
-  useEffect(() => {
-    const initial = {};
-    WHEEL_CONFIGS.forEach(w => {
-      BET_AMOUNTS.forEach(bet => {
-        if (Math.random() < 0.3) { // 30% chance a game exists for this wheel/bet combo
-          const key = `${w.id}_${bet}`;
-          const botCount = Math.floor(Math.random() * 5) + 1;
-          const bots = generateBots(botCount);
-          // Random fill between 10% and 95%
-          const fillPct = 0.10 + Math.random() * 0.85;
-          const filled = Math.max(botCount, Math.floor(w.slots * fillPct));
-          const slotsPerBot = Math.ceil(filled / botCount);
-          initial[key] = {
-            key, wheelId: w.id, betAmount: bet, slots: w.slots,
-            participants: bots.map(b => ({ ...b, tickets: slotsPerBot })),
-            filled: Math.min(filled, w.slots - 1),
-          };
-        }
-      });
-    });
-    setActiveGames(initial);
-  }, []);
+  // Games
+  const [activeGames, setActiveGames] = useState({});
+  const [selectedWheel, setSelectedWheel] = useState(null);
+  const [selectedBet, setSelectedBet] = useState(1);
+  const [ticketCount, setTicketCount] = useState(1);
+  const [currentGame, setCurrentGame] = useState(null);
+  const [spinning, setSpinning] = useState(false);
+  const [winnerIdx, setWinnerIdx] = useState(null);
+  const [gameResult, setGameResult] = useState(null);
+  const [gameCountdown, setGameCountdown] = useState(null);
 
   // Chat
-  const [chatMessages, setChatMessages] = useState([
-    { id: 1, from: "System", text: "Bienvenue sur Spinning! 🎰", ts: Date.now() },
-  ]);
+  const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
-  const [chatTarget, setChatTarget] = useState("global");
 
   // Friends
-  const [friendSearch, setFriendSearch] = useState("");
+  const [friends, setFriends] = useState([]);
+  const [friendInput, setFriendInput] = useState("");
   const [friendMsg, setFriendMsg] = useState("");
 
+  // Wallet
+  const [history, setHistory] = useState([]);
+
+  // Socket
+  const socketRef = useRef(null);
   const chatEndRef = useRef(null);
 
+  // ─── API HELPERS ────────────────────────────────────────────────────────────
+  const api = useCallback(async (path, method = "GET", body = null) => {
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = "Bearer " + token;
+    const res = await fetch(API_URL + path, { method, headers, body: body ? JSON.stringify(body) : null });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Erreur");
+    return data;
+  }, [token]);
+
+  // ─── SOCKET CONNECTION ───────────────────────────────────────────────────────
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
+    if (!token) return;
 
-  // ── AUTH ──
-  const handleAuth = () => {
-    setAuthError("");
-    if (authMode === "login") {
-      const u = users.find(u => u.pseudo === authForm.pseudo && u.password === authForm.password);
-      if (!u) return setAuthError("Pseudo ou mot de passe incorrect");
-      setCurrentUser(u);
-      setScreen("lobby");
-    } else {
-      if (!authForm.pseudo || !authForm.password) return setAuthError("Remplis tous les champs");
-      if (authForm.password !== authForm.confirm) return setAuthError("Mots de passe différents");
-      if (users.find(u => u.pseudo === authForm.pseudo)) return setAuthError("Pseudo déjà pris");
-      const newUser = { id: generateId(), pseudo: authForm.pseudo, password: authForm.password, balance: 500, friends: [], history: [] };
-      setUsers(prev => [...prev, newUser]);
-      setCurrentUser(newUser);
-      setScreen("lobby");
-    }
-  };
+    // Load socket.io dynamically
+    const script = document.createElement("script");
+    script.src = "https://cdn.socket.io/4.7.5/socket.io.min.js";
+    script.onload = () => {
+      const socket = window.io(SOCKET_URL, { auth: { token } });
+      socketRef.current = socket;
 
-  const updateUser = (updater) => {
-    setCurrentUser(prev => {
-      const updated = updater(prev);
-      setUsers(us => us.map(u => u.id === updated.id ? updated : u));
-      return updated;
-    });
-  };
-
-  // ── GAME ──
-  const openWheel = (wheel) => {
-    setSelectedWheel(wheel);
-    setSelectedBet(null);
-    setTicketCount(1);
-    setGameResult(null);
-    setScreen("game");
-  };
-
-  const getGame = (wheelId, betAmount) => {
-    const key = `${wheelId}_${betAmount}`;
-    if (!activeGames[key]) {
-      const cfg = WHEEL_CONFIGS.find(w => w.id === wheelId);
-      const bots = generateBots(Math.min(cfg.slots - 1, 5));
-      const game = {
-        key,
-        wheelId,
-        betAmount,
-        slots: cfg.slots,
-        participants: bots.map(b => ({
-          ...b,
-          tickets: Math.max(1, Math.floor(Math.random() * Math.ceil(cfg.slots / bots.length))),
-        })),
-        filled: bots.reduce((s, b) => s + Math.max(1, Math.floor(Math.random() * 3)), 0),
-      };
-      game.filled = Math.min(game.filled, cfg.slots - 1);
-      setActiveGames(prev => ({ ...prev, [key]: game }));
-      return game;
-    }
-    return activeGames[key];
-  };
-
-  const joinGame = () => {
-    if (!selectedBet || !selectedWheel) return;
-    const totalCost = ticketCount * selectedBet;
-    if (currentUser.balance < totalCost) return alert("Solde insuffisant !");
-
-    const key = `${selectedWheel.id}_${selectedBet}`;
-    const game = getGame(selectedWheel.id, selectedBet);
-    const remaining = selectedWheel.slots - game.filled;
-    const actualTickets = Math.min(ticketCount, remaining - 1, remaining);
-
-    if (actualTickets <= 0) return alert("Plus de places disponibles !");
-
-    const updatedGame = {
-      ...game,
-      participants: [...game.participants, { id: currentUser.id, pseudo: currentUser.pseudo, tickets: actualTickets, isBot: false }],
-      filled: game.filled + actualTickets,
-    };
-
-    updateUser(u => ({ ...u, balance: u.balance - actualTickets * selectedBet }));
-
-    // Fill remaining with bots after random delay 5-15s
-    const botSlots = selectedWheel.slots - updatedGame.filled;
-    const extraBots = generateBots(Math.min(Math.max(botSlots, 1), 8));
-    const withBots = {
-      ...updatedGame,
-      participants: [...updatedGame.participants, ...extraBots.map(b => ({ ...b, tickets: Math.ceil(botSlots / extraBots.length) }))],
-      filled: selectedWheel.slots,
-      betAmount: selectedBet,
-    };
-    setActiveGames(prev => ({ ...prev, [key]: withBots }));
-
-    const delay = 5000 + Math.random() * 10000; // 5s to 15s
-    const delaySeconds = Math.ceil(delay / 1000);
-    setWaitingCountdown(delaySeconds);
-    const countdownInterval = setInterval(() => {
-      setWaitingCountdown(prev => {
-        if (prev <= 1) { clearInterval(countdownInterval); return null; }
-        return prev - 1;
+      socket.on("games_state", (games) => setActiveGames(games));
+      socket.on("game_updated", ({ key, game }) => setActiveGames(prev => ({ ...prev, [key]: game })));
+      socket.on("game_result", ({ key, winner, payout, participants }) => {
+        setSpinning(false);
+        const idx = participants.findIndex(p => p.userId === winner.userId);
+        setWinnerIdx(idx);
+        setGameResult({ winner, payout, key });
+        setActiveGames(prev => { const n = { ...prev }; delete n[key]; return n; });
+        // Refresh balance
+        api("/user/me").then(u => { setUser(u); localStorage.setItem("spinning_user", JSON.stringify(u)); }).catch(() => {});
       });
-    }, 1000);
-    setTimeout(() => launchSpin(withBots, key, actualTickets * selectedBet), delay);
-  };
+      socket.on("chat_message", (msg) => setChatMessages(prev => [...prev, msg].slice(-100)));
+      socket.on("joined_game", ({ key }) => {
+        setCurrentGame(key);
+        setGameCountdown(15);
+      });
+      socket.on("error", (msg) => alert("Erreur: " + msg));
+    };
+    document.head.appendChild(script);
 
-  const launchSpin = (game, key, playerCost) => {
-    const pityKey = key;
-    const lossStreak = pityCounters[pityKey] || 0;
+    return () => {
+      if (socketRef.current) socketRef.current.disconnect();
+    };
+  }, [token]);
 
-    const participants = game.participants;
-    const totalTickets = participants.reduce((s, p) => s + p.tickets, 0);
-    const playerEntry = participants.find(p => p.id === currentUser?.id);
+  // Countdown timer
+  useEffect(() => {
+    if (gameCountdown === null) return;
+    if (gameCountdown <= 0) { setGameCountdown(null); setSpinning(true); return; }
+    const t = setTimeout(() => setGameCountdown(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [gameCountdown]);
 
-    if (!playerEntry) {
-      // No player, just pick random
-      const rand = Math.random() * totalTickets;
-      let cum = 0, wIdx = 0;
-      for (let i = 0; i < participants.length; i++) {
-        cum += participants[i].tickets;
-        if (rand <= cum) { wIdx = i; break; }
-      }
-      setWinnerIdx(wIdx);
-      setSpinning(true);
-      setGameResult({ pending: true, game, winnerIdx: wIdx, playerCost });
-      return;
+  // Auto scroll chat
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
+
+  // Load chat history on connect
+  useEffect(() => {
+    if (!token) return;
+    api("/chat/history").then(msgs => {
+      setChatMessages(msgs.map(m => ({ id: m.id, from: m.pseudo, text: m.text, ts: new Date(m.created_at).getTime() })));
+    }).catch(() => {});
+  }, [token]);
+
+  // ─── AUTH ────────────────────────────────────────────────────────────────────
+  async function handleAuth(e) {
+    e.preventDefault();
+    setAuthError("");
+    try {
+      const data = await api(`/auth/${authMode}`, "POST", authForm);
+      setToken(data.token);
+      setUser(data.user);
+      localStorage.setItem("spinning_token", data.token);
+      localStorage.setItem("spinning_user", JSON.stringify(data.user));
+    } catch (err) {
+      setAuthError(err.message);
     }
+  }
 
-    // Pity system (hidden from user):
-    // Chaque ticket perdu = +1% de bonus de chance pour ce joueur
-    // On calcule le score pondéré de chaque participant: tickets × (1 + pity*0.01)
-    // Puis on tire au sort proportionnellement à ces scores
+  function logout() {
+    setToken(null); setUser(null);
+    localStorage.removeItem("spinning_token");
+    localStorage.removeItem("spinning_user");
+    if (socketRef.current) socketRef.current.disconnect();
+  }
 
-    // Pour les bots, on leur attribue un pity aléatoire simulé (0-5 pertes)
-    const weightedParticipants = participants.map(p => {
-      let pity = 0;
-      if (p.id === currentUser?.id) {
-        // Pity divisé par le nombre de tickets pris (plus tu prends de tickets, moins le bonus par ticket compte)
-        pity = p.tickets > 0 ? lossStreak / p.tickets : lossStreak;
-      } else {
-        pity = Math.floor(Math.random() * 6); // bots: 0-5 pertes simulées
-      }
-      const weight = p.tickets * (1 + pity * 0.01);
-      return { ...p, weight };
-    });
+  // ─── GAME ACTIONS ────────────────────────────────────────────────────────────
+  function joinGame() {
+    if (!socketRef.current || !selectedWheel) return;
+    setGameResult(null);
+    socketRef.current.emit("join_game", { wheelId: selectedWheel.id, betAmount: selectedBet, tickets: ticketCount });
+    setPage("game");
+  }
 
-    const totalWeight = weightedParticipants.reduce((s, p) => s + p.weight, 0);
-    const rand2 = Math.random() * totalWeight;
-    let cum2 = 0;
-    let wIdx = 0;
-    for (let i = 0; i < weightedParticipants.length; i++) {
-      cum2 += weightedParticipants[i].weight;
-      if (rand2 <= cum2) { wIdx = i; break; }
-    }
-    const finalProb = weightedParticipants.find(p => p.id === currentUser?.id)?.weight / totalWeight || 0;
-    const playerWins = weightedParticipants[wIdx].id === currentUser?.id;
-
-    setWinnerIdx(wIdx);
-    setSpinning(true);
-    setGameResult({ pending: true, game, winnerIdx: wIdx, playerCost, playerWins, pityKey, lossStreak });
-  };
-
-  const onSpinDone = () => {
-    setSpinning(false);
-    const { game, winnerIdx: wIdx, playerCost, pityKey } = gameResult;
-    const winner = game.participants[wIdx];
-    const pot = game.slots * game.betAmount;
-    const payout = pot * 0.9;
-    const isWinner = winner.id === currentUser.id;
-
-    // Update pity counter: reset on win, add tickets lost on loss
-    // pityKey might be undefined if playerEntry wasn't found, guard it
-    if (pityKey) {
-      const myTickets = game.participants.find(p => p.id === currentUser?.id)?.tickets || 1;
-      setPityCounters(prev => ({
-        ...prev,
-        // Chaque ticket perdu = +1% → on accumule le nb de tickets perdus
-        [pityKey]: isWinner ? 0 : (prev[pityKey] || 0) + myTickets,
-      }));
-    }
-
-    if (isWinner) {
-      updateUser(u => ({
-        ...u,
-        balance: u.balance + payout,
-        history: [{ id: generateId(), type: "win", amount: payout, desc: `Gagné roue ${selectedWheel?.label}`, ts: Date.now() }, ...u.history],
-      }));
-    } else {
-      updateUser(u => ({
-        ...u,
-        history: [{ id: generateId(), type: "loss", amount: -playerCost, desc: `Perdu roue ${selectedWheel?.label}`, ts: Date.now() }, ...u.history],
-      }));
-    }
-
-    setGameResult({ ...gameResult, pending: false, winner, payout, isWinner });
-    const key = `${game.wheelId}_${game.betAmount}`;
-    setActiveGames(prev => { const n = { ...prev }; delete n[key]; return n; });
-  };
-
-  const sendChat = () => {
-    if (!chatInput.trim()) return;
-    setChatMessages(prev => [...prev, { id: Date.now(), from: currentUser.pseudo, text: chatInput, ts: Date.now() }]);
+  function sendChat() {
+    if (!chatInput.trim() || !socketRef.current) return;
+    socketRef.current.emit("chat_message", { text: chatInput.trim() });
     setChatInput("");
-  };
+  }
 
-  const addFriend = (pseudo) => {
-    const target = users.find(u => u.pseudo === pseudo && u.id !== currentUser.id);
-    if (!target) return setFriendMsg("Utilisateur introuvable");
-    if (currentUser.friends.includes(target.id)) return setFriendMsg("Déjà ami !");
-    updateUser(u => ({ ...u, friends: [...u.friends, target.id] }));
-    setFriendMsg(`${pseudo} ajouté !`);
-  };
+  async function loadWallet() {
+    try {
+      const data = await api("/user/history");
+      setHistory(data);
+    } catch {}
+  }
 
-  const friendUsers = currentUser ? users.filter(u => currentUser.friends.includes(u.id)) : [];
+  async function loadFriends() {
+    try {
+      const data = await api("/user/friends");
+      setFriends(data);
+    } catch {}
+  }
 
-  // ── RENDER ──
+  async function addFriend() {
+    try {
+      await api("/user/friends", "POST", { pseudo: friendInput });
+      setFriendMsg("Ami ajouté !");
+      setFriendInput("");
+      loadFriends();
+    } catch (err) {
+      setFriendMsg(err.message);
+    }
+  }
 
-  const styles = {
-    app: { minHeight: "100vh", background: "#f8fafc", fontFamily: "'DM Sans', 'Segoe UI', sans-serif", color: "#0f172a" },
-    card: { background: "#fff", borderRadius: 16, boxShadow: "0 2px 20px rgba(0,0,0,0.08)", padding: 24 },
-    btn: { background: "#6366f1", color: "#fff", border: "none", borderRadius: 10, padding: "10px 22px", fontWeight: 700, cursor: "pointer", fontSize: 14, transition: "all 0.15s" },
-    btnGray: { background: "#e2e8f0", color: "#475569", border: "none", borderRadius: 10, padding: "10px 22px", fontWeight: 600, cursor: "pointer", fontSize: 14 },
-    input: { border: "2px solid #e2e8f0", borderRadius: 10, padding: "10px 14px", fontSize: 14, width: "100%", outline: "none", boxSizing: "border-box", fontFamily: "inherit" },
-    nav: { display: "flex", gap: 8, background: "#fff", padding: "12px 24px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", position: "sticky", top: 0, zIndex: 100, alignItems: "center" },
-    navBtn: (active) => ({ background: active ? "#6366f1" : "transparent", color: active ? "#fff" : "#64748b", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, cursor: "pointer", fontSize: 13 }),
-    tag: (color) => ({ background: color + "22", color, borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700 }),
-    badge: { background: "#6366f1", color: "#fff", borderRadius: 99, padding: "2px 8px", fontSize: 11, fontWeight: 700 },
-  };
+  // ─── RENDER: AUTH ───────────────────────────────────────────────────────────
+  if (!token) return (
+    <div style={{ minHeight:"100vh", background:"#0f172a", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"system-ui" }}>
+      <div style={{ background:"#1e293b", borderRadius:16, padding:40, width:340, boxShadow:"0 25px 50px rgba(0,0,0,0.5)" }}>
+        <div style={{ textAlign:"center", marginBottom:24 }}>
+          <div style={{ fontSize:48 }}>🎡</div>
+          <h1 style={{ color:"#f1f5f9", fontSize:28, margin:"8px 0 4px" }}>SPINNING</h1>
+          <p style={{ color:"#64748b", fontSize:14 }}>La roue de la fortune crypto</p>
+        </div>
 
-  // AUTH SCREEN
-  if (screen === "auth") {
+        <div style={{ display:"flex", marginBottom:20, background:"#0f172a", borderRadius:8, padding:4 }}>
+          {["login","register"].map(m => (
+            <button key={m} onClick={() => setAuthMode(m)} style={{
+              flex:1, padding:"8px 0", border:"none", borderRadius:6, cursor:"pointer",
+              background: authMode===m ? "#6366f1" : "transparent",
+              color: authMode===m ? "#fff" : "#64748b", fontWeight:600, fontSize:13
+            }}>{m === "login" ? "Connexion" : "Inscription"}</button>
+          ))}
+        </div>
+
+        <form onSubmit={handleAuth}>
+          <input value={authForm.pseudo} onChange={e => setAuthForm(f => ({...f, pseudo: e.target.value}))}
+            placeholder="Pseudo" style={inputStyle} />
+          <input value={authForm.password} onChange={e => setAuthForm(f => ({...f, password: e.target.value}))}
+            type="password" placeholder="Mot de passe" style={{...inputStyle, marginTop:10}} />
+          {authError && <p style={{ color:"#ef4444", fontSize:13, marginTop:8 }}>{authError}</p>}
+          <button type="submit" style={{
+            width:"100%", marginTop:16, padding:"12px 0", border:"none", borderRadius:8,
+            background:"linear-gradient(135deg,#6366f1,#8b5cf6)", color:"#fff",
+            fontWeight:700, fontSize:15, cursor:"pointer"
+          }}>{authMode === "login" ? "Se connecter" : "S'inscrire"}</button>
+        </form>
+
+        <p style={{ color:"#475569", fontSize:12, textAlign:"center", marginTop:16 }}>
+          Démo : DemoUser / demo123
+        </p>
+      </div>
+    </div>
+  );
+
+  // ─── RENDER: GAME VIEW ──────────────────────────────────────────────────────
+  if (page === "game" && currentGame) {
+    const gameKey = currentGame;
+    const game = activeGames[gameKey];
+    const participants = game?.participants || [];
+    const cfg = WHEEL_CONFIGS.find(w => `${w.id}_${selectedBet}` === gameKey || w.id === selectedWheel?.id);
+
     return (
-      <div style={{ ...styles.app, display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg,#f0f4ff 0%,#fdf4ff 100%)" }}>
-        <div style={{ ...styles.card, width: 380, padding: 40 }}>
-          <div style={{ textAlign: "center", marginBottom: 32 }}>
-            <div style={{ fontSize: 40, marginBottom: 8 }}>🎡</div>
-            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -1 }}>Spinning</h1>
-            <p style={{ color: "#94a3b8", margin: "4px 0 0", fontSize: 14 }}>La roue de la fortune crypto</p>
-          </div>
+      <div style={{ minHeight:"100vh", background:"#0f172a", fontFamily:"system-ui", color:"#f1f5f9" }}>
+        <nav style={navStyle}>
+          <span style={{ fontWeight:800, fontSize:18 }}>🎡 SPINNING</span>
+          <button onClick={() => { setPage("lobby"); setCurrentGame(null); setGameResult(null); }} style={btnSecStyle}>← Lobby</button>
+        </nav>
 
-          <div style={{ display: "flex", gap: 8, marginBottom: 24, background: "#f1f5f9", borderRadius: 10, padding: 4 }}>
-            {["login", "register"].map(m => (
-              <button key={m} onClick={() => setAuthMode(m)} style={{ flex: 1, border: "none", borderRadius: 8, padding: "8px 0", fontWeight: 700, cursor: "pointer", fontSize: 13, background: authMode === m ? "#fff" : "transparent", color: authMode === m ? "#6366f1" : "#64748b", boxShadow: authMode === m ? "0 1px 4px rgba(0,0,0,0.1)" : "none" }}>
-                {m === "login" ? "Connexion" : "Inscription"}
+        <div style={{ maxWidth:600, margin:"0 auto", padding:"32px 16px" }}>
+          {gameResult ? (
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontSize:72, marginBottom:16 }}>
+                {gameResult.winner.userId === user?.id ? "🏆" : "😢"}
+              </div>
+              <h2 style={{ fontSize:28, color: gameResult.winner.userId === user?.id ? "#22c55e" : "#ef4444" }}>
+                {gameResult.winner.userId === user?.id ? `Tu gagnes ${gameResult.payout.toFixed(2)}€ !` : `${gameResult.winner.pseudo} a gagné !`}
+              </h2>
+              <p style={{ color:"#64748b", marginBottom:24 }}>Mise totale: {cfg?.slots || 0} × {selectedBet}€</p>
+              <button onClick={() => { setPage("lobby"); setCurrentGame(null); setGameResult(null); }} style={btnPrimStyle}>
+                Rejouer
               </button>
-            ))}
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <input style={styles.input} placeholder="Pseudo" value={authForm.pseudo} onChange={e => setAuthForm(f => ({ ...f, pseudo: e.target.value }))} />
-            <input style={styles.input} type="password" placeholder="Mot de passe" value={authForm.password} onChange={e => setAuthForm(f => ({ ...f, password: e.target.value }))} />
-            {authMode === "register" && <input style={styles.input} type="password" placeholder="Confirmer mot de passe" value={authForm.confirm} onChange={e => setAuthForm(f => ({ ...f, confirm: e.target.value }))} />}
-            {authError && <p style={{ color: "#ef4444", fontSize: 13, margin: 0 }}>{authError}</p>}
-            <button style={{ ...styles.btn, padding: "12px 0", fontSize: 15 }} onClick={handleAuth}>
-              {authMode === "login" ? "Se connecter" : "Créer mon compte"}
-            </button>
-          </div>
-
-          <p style={{ textAlign: "center", color: "#94a3b8", fontSize: 12, marginTop: 20 }}>
-            Démo: pseudo <b>DemoUser</b> / mdp <b>demo123</b> · Solde 1000€
-          </p>
+            </div>
+          ) : (
+            <>
+              <h2 style={{ textAlign:"center", color:"#6366f1" }}>
+                Roue {cfg?.label} — Mise {selectedBet}€
+              </h2>
+              {gameCountdown !== null && (
+                <div style={{ textAlign:"center", fontSize:48, color:"#fbbf24", fontWeight:800 }}>
+                  {gameCountdown}s
+                </div>
+              )}
+              <div style={{ display:"flex", justifyContent:"center", margin:"24px 0" }}>
+                <WheelCanvas
+                  participants={participants.length ? participants : [{ pseudo:"En attente...", tickets:1 }]}
+                  spinning={spinning}
+                  winnerIndex={winnerIdx}
+                  onDone={() => {}}
+                />
+              </div>
+              <div style={{ background:"#1e293b", borderRadius:12, padding:16 }}>
+                <h3 style={{ margin:"0 0 12px", color:"#94a3b8", fontSize:14 }}>
+                  Joueurs ({game?.filled || 0}/{cfg?.slots || 0})
+                </h3>
+                {participants.map((p, i) => (
+                  <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom:"1px solid #0f172a" }}>
+                    <span style={{ color: p.userId === user?.id ? "#6366f1" : "#e2e8f0" }}>
+                      {p.isBot ? "🤖" : "👤"} {p.pseudo}
+                    </span>
+                    <span style={{ color:"#fbbf24" }}>{p.tickets} ticket(s)</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
   }
 
+  // ─── RENDER: LOBBY ──────────────────────────────────────────────────────────
   return (
-    <div style={styles.app}>
+    <div style={{ minHeight:"100vh", background:"#0f172a", fontFamily:"system-ui", color:"#f1f5f9" }}>
       {/* NAV */}
-      <div style={styles.nav}>
-        <div style={{ fontSize: 22, marginRight: 8 }}>🎡</div>
-        <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.5, marginRight: 16 }}>Spinning</span>
-        {[["lobby","🏠 Lobby"],["wallet","💰 Portefeuille"],["friends","👥 Amis"],["chat","💬 Chat"]].map(([s, label]) => (
-          <button key={s} onClick={() => setScreen(s)} style={styles.navBtn(screen === s)}>{label}</button>
-        ))}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ background: "#f0fdf4", border: "2px solid #86efac", borderRadius: 10, padding: "6px 14px", fontWeight: 700, color: "#16a34a", fontSize: 14 }}>
-            💎 {currentUser?.balance?.toFixed(2)} €
+      <nav style={navStyle}>
+        <span style={{ fontWeight:800, fontSize:18 }}>🎡 SPINNING</span>
+        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          {["lobby","wallet","friends","chat"].map(p => (
+            <button key={p} onClick={() => { setPage(p); if(p==="wallet") loadWallet(); if(p==="friends") loadFriends(); }}
+              style={{ ...btnSecStyle, background: page===p ? "#6366f1" : "transparent" }}>
+              {p === "lobby" ? "🎡 Lobby" : p === "wallet" ? "💰 Wallet" : p === "friends" ? "👥 Amis" : "💬 Chat"}
+            </button>
+          ))}
+          <div style={{ background:"#1e293b", borderRadius:8, padding:"6px 12px", fontSize:14 }}>
+            <span style={{ color:"#64748b" }}>{user?.pseudo}</span>
+            <span style={{ color:"#22c55e", fontWeight:700, marginLeft:8 }}>{(user?.balance || 0).toFixed(2)}€</span>
           </div>
-          <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#6366f1", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 14 }}>
-            {currentUser?.pseudo?.[0]?.toUpperCase()}
-          </div>
-          <button style={styles.btnGray} onClick={() => { setCurrentUser(null); setScreen("auth"); }}>Déco</button>
+          <button onClick={logout} style={{ ...btnSecStyle, color:"#ef4444" }}>Déco</button>
         </div>
-      </div>
+      </nav>
 
-      {/* LOBBY */}
-      {screen === "lobby" && (
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 16px" }}>
-          <h2 style={{ fontWeight: 800, fontSize: 24, marginBottom: 8 }}>Choisir une Roue</h2>
-          <p style={{ color: "#64748b", marginBottom: 24 }}>Plus la fraction est petite, plus les gains sont élevés — mais moins tu as de chances de gagner.</p>
+      <div style={{ maxWidth:1200, margin:"0 auto", padding:"24px 16px" }}>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 16 }}>
-            {WHEEL_CONFIGS.map(w => {
-              const wheelGames = Object.values(activeGames).filter(g => g.wheelId === w.id);
-              const totalPlayers = wheelGames.reduce((s, g) => s + g.participants.length, 0);
-              const waitingGames = wheelGames.length;
-              const almostFullGames = wheelGames.filter(g => (w.slots - g.filled) / w.slots < 0.10).length;
-              return (
-                <div key={w.id} onClick={() => openWheel(w)} style={{ ...styles.card, cursor: "pointer", borderTop: `4px solid ${w.color}`, transition: "transform 0.15s, box-shadow 0.15s", padding: 20 }}
-                  onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.style.boxShadow = "0 8px 30px rgba(0,0,0,0.13)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = "0 2px 20px rgba(0,0,0,0.08)"; }}>
-
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                    <div style={{ fontSize: 32 }}>🎡</div>
-                    {totalPlayers > 0 && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: "3px 8px" }}>
-                        <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#22c55e" }} />
-                        <span style={{ fontSize: 12, fontWeight: 700, color: "#16a34a" }}>{totalPlayers} joueur{totalPlayers > 1 ? "s" : ""}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  <div style={{ fontWeight: 800, fontSize: 22 }}>{w.label}</div>
-                  <div style={styles.tag(w.color)}>{w.odds} de gain</div>
-                  <div style={{ color: "#94a3b8", fontSize: 13, marginTop: 8 }}>{w.slots} places max</div>
-
-                  {almostFullGames > 0 && (
-                    <div style={{ marginTop: 10, padding: "6px 10px", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 10, display: "flex", alignItems: "center", gap: 6 }}>
-                      <span>🔥</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "#ea580c" }}>{almostFullGames} bientôt pleine{almostFullGames > 1 ? "s" : ""} !</span>
+        {/* LOBBY */}
+        {page === "lobby" && (
+          <>
+            {/* Wheel selector */}
+            <h2 style={{ color:"#94a3b8", fontSize:14, textTransform:"uppercase", letterSpacing:2, marginBottom:16 }}>
+              Choisir la roue
+            </h2>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))", gap:12, marginBottom:32 }}>
+              {WHEEL_CONFIGS.map(w => {
+                const gameKeys = Object.keys(activeGames).filter(k => k.startsWith(w.id + "_"));
+                const totalPlayers = gameKeys.reduce((s, k) => s + (activeGames[k]?.participants?.length || 0), 0);
+                const isFull = gameKeys.some(k => activeGames[k]?.filled >= activeGames[k]?.slots);
+                return (
+                  <div key={w.id} onClick={() => setSelectedWheel(w)} style={{
+                    background: selectedWheel?.id === w.id ? "#1e3a5f" : "#1e293b",
+                    border: `2px solid ${selectedWheel?.id === w.id ? w.color : "#334155"}`,
+                    borderRadius:12, padding:16, cursor:"pointer", transition:"all 0.2s"
+                  }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <span style={{ fontSize:20, fontWeight:800, color:w.color }}>{w.label}</span>
+                      <span style={{ fontSize:11, color:"#64748b" }}>{w.odds}</span>
                     </div>
-                  )}
-
-                  <button style={{ ...styles.btn, marginTop: 12, width: "100%", padding: "8px 0", background: w.color }}>Jouer</button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* GAME */}
-      {screen === "game" && selectedWheel && (
-        <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 16px" }}>
-          <button style={styles.btnGray} onClick={() => { setScreen("lobby"); setGameResult(null); setSpinning(false); }}>← Retour</button>
-
-          <h2 style={{ fontWeight: 800, fontSize: 24, margin: "20px 0 4px" }}>Roue {selectedWheel.label}</h2>
-          <p style={{ color: "#64748b", marginBottom: 24 }}>{selectedWheel.slots} participants · {selectedWheel.odds} de chance de gagner</p>
-
-          {!selectedBet ? (
-            <>
-              <h3 style={{ fontWeight: 700, marginBottom: 12 }}>Choisir la mise par ticket</h3>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                {BET_AMOUNTS.map(b => (
-                  <button key={b} onClick={() => setSelectedBet(b)}
-                    style={{ ...styles.btn, background: "#f1f5f9", color: "#0f172a", border: "2px solid #e2e8f0", padding: "12px 20px", fontSize: 15, fontWeight: 700 }}
-                    onMouseEnter={e => e.currentTarget.style.background = "#6366f1" + "22"}
-                    onMouseLeave={e => e.currentTarget.style.background = "#f1f5f9"}>
-                    {b} €
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-              {/* LEFT: wheel */}
-              <div style={styles.card}>
-                <div style={{ textAlign: "center", marginBottom: 16 }}>
-                  {(() => {
-                    const game = getGame(selectedWheel.id, selectedBet);
-                    const allParticipants = gameResult?.game?.participants || [...game.participants, { id: currentUser.id, pseudo: currentUser.pseudo, tickets: ticketCount, isBot: false }];
-                    return (
-                      <>
-                        <WheelCanvas
-                          participants={allParticipants}
-                          spinning={spinning}
-                          winnerIndex={winnerIdx}
-                          onDone={onSpinDone}
-                        />
-                        {gameResult && !gameResult.pending && (
-                          <div style={{ marginTop: 16, padding: 16, background: gameResult.isWinner ? "#f0fdf4" : "#fff1f2", borderRadius: 12, border: `2px solid ${gameResult.isWinner ? "#86efac" : "#fecaca"}` }}>
-                            {gameResult.isWinner
-                              ? <><div style={{ fontSize: 28 }}>🏆</div><div style={{ fontWeight: 800, color: "#16a34a", fontSize: 18 }}>Tu as gagné {gameResult.payout.toFixed(2)} €!</div></>
-                              : <><div style={{ fontSize: 28 }}>😢</div><div style={{ fontWeight: 800, color: "#dc2626", fontSize: 16 }}>Gagné par {gameResult.winner.pseudo}</div></>
-                            }
-                            <button style={{ ...styles.btn, marginTop: 12 }} onClick={() => { setSelectedBet(null); setGameResult(null); }}>Rejouer</button>
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()}
-                </div>
-              </div>
-
-              {/* RIGHT: join */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                <div style={styles.card}>
-                  <h3 style={{ margin: "0 0 12px", fontWeight: 700 }}>Ta participation</h3>
-                  <div style={{ color: "#64748b", fontSize: 13, marginBottom: 12 }}>Mise: <b>{selectedBet} €</b> par ticket · Cagnotte totale: <b>{(selectedBet * selectedWheel.slots * 0.9).toFixed(0)} €</b> (après 10% commission)</div>
-
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                    <button style={{ ...styles.btnGray, padding: "8px 16px", fontSize: 18, lineHeight: 1 }} onClick={() => setTicketCount(t => Math.max(1, t - 1))}>−</button>
-                    <input
-                      type="number"
-                      min={1}
-                      max={selectedWheel.slots - 1}
-                      value={ticketCount}
-                      onChange={e => {
-                        const val = parseInt(e.target.value) || 1;
-                        setTicketCount(Math.min(Math.max(1, val), selectedWheel.slots - 1));
-                      }}
-                      style={{
-                        border: "2px solid #e2e8f0",
-                        borderRadius: 10,
-                        textAlign: "center",
-                        fontWeight: 800,
-                        fontFamily: "inherit",
-                        outline: "none",
-                        background: "#f8fafc",
-                        color: "#0f172a",
-                        transition: "font-size 0.15s, width 0.15s",
-                        fontSize: ticketCount >= 100 ? 16 : ticketCount >= 10 ? 20 : 26,
-                        width: ticketCount >= 1000 ? 80 : ticketCount >= 100 ? 68 : ticketCount >= 10 ? 58 : 52,
-                        padding: "6px 4px",
-                        MozAppearance: "textfield",
-                      }}
-                    />
-                    <button style={{ ...styles.btnGray, padding: "8px 16px", fontSize: 18, lineHeight: 1 }} onClick={() => setTicketCount(t => Math.min(t + 1, selectedWheel.slots - 1))}>+</button>
-                    <span style={{ color: "#94a3b8", fontSize: 13 }}>tickets</span>
-                  </div>
-
-                  <div style={{ background: "#f8fafc", borderRadius: 10, padding: 12, marginBottom: 12 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                      <span>Coût total</span><b>{(ticketCount * selectedBet).toFixed(2)} €</b>
+                    <div style={{ marginTop:8, fontSize:13, color:"#94a3b8" }}>
+                      {w.slots} places
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 4 }}>
-                      <span>Tes chances</span><b>{((ticketCount / selectedWheel.slots) * 100).toFixed(2)}%</b>
+                    <div style={{ marginTop:6, fontSize:12, display:"flex", gap:8 }}>
+                      <span style={{ color:"#22c55e" }}>🟢 {totalPlayers} joueurs</span>
+                      {isFull && <span style={{ color:"#ef4444" }}>🔥 Chaud!</span>}
                     </div>
                   </div>
-
-                  {waitingCountdown !== null && !spinning && (
-                    <div style={{ background: "#fffbeb", border: "2px solid #fde68a", borderRadius: 10, padding: "10px 14px", marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ fontSize: 20 }}>⏳</div>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 13, color: "#92400e" }}>Remplissage en cours...</div>
-                        <div style={{ fontSize: 12, color: "#b45309" }}>Lancement dans <b>{waitingCountdown}s</b></div>
-                      </div>
-                    </div>
-                  )}
-                  <button style={{ ...styles.btn, width: "100%", padding: "12px 0", opacity: waitingCountdown !== null || spinning ? 0.6 : 1 }} onClick={joinGame} disabled={spinning || waitingCountdown !== null}>
-                    {spinning ? "🎡 Roue en cours..." : waitingCountdown !== null ? `⏳ Lancement dans ${waitingCountdown}s` : `Rejoindre — ${(ticketCount * selectedBet).toFixed(2)} €`}
-                  </button>
-                  <button style={{ ...styles.btnGray, width: "100%", padding: "10px 0", marginTop: 8 }} onClick={() => setSelectedBet(null)}>Changer la mise</button>
-                </div>
-
-                {/* Participants */}
-                <div style={styles.card}>
-                  <h3 style={{ margin: "0 0 12px", fontWeight: 700 }}>Participants</h3>
-                  {(() => {
-                    const game = getGame(selectedWheel.id, selectedBet);
-                    const totalT = game.participants.reduce((s, p) => s + p.tickets, 0);
-                    return (
-                      <>
-                        <div style={{ marginBottom: 8 }}>
-                          <div style={{ height: 8, background: "#e2e8f0", borderRadius: 4, overflow: "hidden" }}>
-                            <div style={{ height: "100%", width: `${(game.filled / selectedWheel.slots) * 100}%`, background: "#6366f1", borderRadius: 4, transition: "width 0.5s" }} />
-                          </div>
-                          <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>{game.filled}/{selectedWheel.slots} places</div>
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
-                          {game.participants.map((p, i) => (
-                            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-                              <div style={{ width: 24, height: 24, borderRadius: "50%", background: COLORS[i % COLORS.length], display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, fontWeight: 700 }}>
-                                {p.pseudo[0]}
-                              </div>
-                              <span style={{ flex: 1, fontWeight: p.id === currentUser?.id ? 700 : 400 }}>{p.pseudo}</span>
-                              <span style={{ color: "#94a3b8" }}>{p.tickets}t</span>
-                              <span style={{ ...styles.tag("#6366f1") }}>{((p.tickets / totalT) * 100).toFixed(1)}%</span>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    );
-                  })()}
-                </div>
-              </div>
+                );
+              })}
             </div>
-          )}
-        </div>
-      )}
 
-      {/* WALLET */}
-      {screen === "wallet" && (
-        <div style={{ maxWidth: 700, margin: "0 auto", padding: "32px 16px" }}>
-          <h2 style={{ fontWeight: 800, fontSize: 24, marginBottom: 24 }}>Mon Portefeuille</h2>
-          <div style={{ ...styles.card, background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", marginBottom: 24 }}>
-            <div style={{ fontSize: 13, opacity: 0.8 }}>Solde disponible</div>
-            <div style={{ fontSize: 48, fontWeight: 800, margin: "8px 0" }}>💎 {currentUser.balance.toFixed(2)} €</div>
-            <div style={{ fontSize: 13, opacity: 0.7 }}>Crypto simulé · {currentUser.pseudo}</div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
-            <div style={styles.card}>
-              <div style={{ fontSize: 13, color: "#64748b" }}>Parties jouées</div>
-              <div style={{ fontSize: 28, fontWeight: 800 }}>{currentUser.history.length}</div>
-            </div>
-            <div style={styles.card}>
-              <div style={{ fontSize: 13, color: "#64748b" }}>Total gagné</div>
-              <div style={{ fontSize: 28, fontWeight: 800, color: "#16a34a" }}>
-                {currentUser.history.filter(h => h.type === "win").reduce((s, h) => s + h.amount, 0).toFixed(2)} €
-              </div>
-            </div>
-          </div>
-
-          <div style={styles.card}>
-            <h3 style={{ fontWeight: 700, marginBottom: 16 }}>Historique</h3>
-            {currentUser.history.length === 0
-              ? <p style={{ color: "#94a3b8", textAlign: "center" }}>Aucune transaction</p>
-              : currentUser.history.map(h => (
-                <div key={h.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #f1f5f9" }}>
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>{h.desc}</div>
-                    <div style={{ color: "#94a3b8", fontSize: 12 }}>{new Date(h.ts).toLocaleString("fr-FR")}</div>
-                  </div>
-                  <div style={{ fontWeight: 800, color: h.type === "win" ? "#16a34a" : "#ef4444" }}>
-                    {h.type === "win" ? "+" : ""}{h.amount.toFixed(2)} €
+            {/* Bet + join */}
+            {selectedWheel && (
+              <div style={{ background:"#1e293b", borderRadius:16, padding:24, marginBottom:32 }}>
+                <h3 style={{ margin:"0 0 16px", color:"#e2e8f0" }}>
+                  Roue {selectedWheel.label} — Gain potentiel: {(selectedWheel.slots * selectedBet * ticketCount * 0.9).toFixed(2)}€
+                </h3>
+                <div style={{ marginBottom:16 }}>
+                  <p style={{ color:"#64748b", fontSize:13, marginBottom:8 }}>Mise par ticket</p>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                    {BET_AMOUNTS.filter(b => b <= (user?.balance || 0) || b === 1).map(b => (
+                      <button key={b} onClick={() => setSelectedBet(b)} style={{
+                        padding:"6px 14px", border:"none", borderRadius:8, cursor:"pointer",
+                        background: selectedBet===b ? "#6366f1" : "#334155",
+                        color: selectedBet===b ? "#fff" : "#94a3b8", fontWeight:600
+                      }}>{b}€</button>
+                    ))}
                   </div>
                 </div>
-              ))
-            }
-          </div>
-        </div>
-      )}
-
-      {/* FRIENDS */}
-      {screen === "friends" && (
-        <div style={{ maxWidth: 600, margin: "0 auto", padding: "32px 16px" }}>
-          <h2 style={{ fontWeight: 800, fontSize: 24, marginBottom: 24 }}>Amis</h2>
-
-          <div style={{ ...styles.card, marginBottom: 20 }}>
-            <h3 style={{ fontWeight: 700, marginBottom: 12 }}>Ajouter un ami</h3>
-            <div style={{ display: "flex", gap: 10 }}>
-              <input style={{ ...styles.input }} placeholder="Pseudo exact..." value={friendSearch} onChange={e => setFriendSearch(e.target.value)} />
-              <button style={styles.btn} onClick={() => { addFriend(friendSearch); setFriendSearch(""); }}>Ajouter</button>
-            </div>
-            {friendMsg && <p style={{ color: "#6366f1", fontWeight: 600, margin: "8px 0 0", fontSize: 13 }}>{friendMsg}</p>}
-          </div>
-
-          <div style={styles.card}>
-            <h3 style={{ fontWeight: 700, marginBottom: 12 }}>Mes amis ({friendUsers.length})</h3>
-            {friendUsers.length === 0
-              ? <p style={{ color: "#94a3b8", textAlign: "center" }}>Ajoute des amis !</p>
-              : friendUsers.map(u => (
-                <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid #f1f5f9" }}>
-                  <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#6366f1", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800 }}>
-                    {u.pseudo[0].toUpperCase()}
+                <div style={{ marginBottom:16 }}>
+                  <p style={{ color:"#64748b", fontSize:13, marginBottom:8 }}>Nombre de tickets</p>
+                  <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                    <button onClick={() => setTicketCount(c => Math.max(1,c-1))} style={btnSecStyle}>-</button>
+                    <span style={{ fontSize:20, fontWeight:700, minWidth:40, textAlign:"center" }}>{ticketCount}</span>
+                    <button onClick={() => setTicketCount(c => Math.min(selectedWheel.slots, c+1))} style={btnSecStyle}>+</button>
+                    <span style={{ color:"#64748b", fontSize:13 }}>Coût total: {ticketCount * selectedBet}€</span>
                   </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700 }}>{u.pseudo}</div>
-                    <div style={{ color: "#94a3b8", fontSize: 12 }}>En ligne</div>
-                  </div>
-                  <button style={{ ...styles.btn, padding: "6px 14px", fontSize: 12 }} onClick={() => { setChatTarget(u.pseudo); setScreen("chat"); }}>
-                    💬 Message
-                  </button>
                 </div>
-              ))
-            }
-          </div>
-
-          <div style={{ ...styles.card, marginTop: 20 }}>
-            <h3 style={{ fontWeight: 700, marginBottom: 8 }}>Joueurs ({users.length})</h3>
-            {users.filter(u => u.id !== currentUser.id).map(u => (
-              <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #f1f5f9" }}>
-                <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#e2e8f0", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13 }}>
-                  {u.pseudo[0].toUpperCase()}
-                </div>
-                <span style={{ flex: 1, fontSize: 14 }}>{u.pseudo}</span>
-                {!currentUser.friends.includes(u.id) && (
-                  <button style={{ ...styles.btnGray, padding: "4px 10px", fontSize: 12 }} onClick={() => addFriend(u.pseudo)}>+ Ami</button>
+                <button onClick={joinGame} disabled={ticketCount * selectedBet > (user?.balance || 0)}
+                  style={{ ...btnPrimStyle, opacity: ticketCount * selectedBet > (user?.balance || 0) ? 0.5 : 1 }}>
+                  🎰 Jouer — {ticketCount * selectedBet}€
+                </button>
+                {ticketCount * selectedBet > (user?.balance || 0) && (
+                  <p style={{ color:"#ef4444", fontSize:13, marginTop:8 }}>Solde insuffisant</p>
                 )}
+              </div>
+            )}
+
+            {/* Active games */}
+            <h2 style={{ color:"#94a3b8", fontSize:14, textTransform:"uppercase", letterSpacing:2, marginBottom:16 }}>
+              Parties en cours ({Object.keys(activeGames).length})
+            </h2>
+            {Object.keys(activeGames).length === 0 ? (
+              <div style={{ background:"#1e293b", borderRadius:16, padding:40, textAlign:"center" }}>
+                <div style={{ fontSize:48, marginBottom:12 }}>🎡</div>
+                <p style={{ color:"#64748b", fontSize:16 }}>Aucune partie en cours</p>
+                <p style={{ color:"#475569", fontSize:13, marginTop:8 }}>Sois le premier à créer une partie en choisissant une roue et une mise !</p>
+              </div>
+            ) : (
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))", gap:12 }}>
+                {Object.entries(activeGames).map(([key, game]) => {
+                  const w = WHEEL_CONFIGS.find(w => w.id === game.wheelId);
+                  const pct = ((game.filled / game.slots) * 100).toFixed(0);
+                  const placesLeft = game.slots - game.filled;
+                  const isAlmostFull = placesLeft <= Math.ceil(game.slots * 0.1);
+                  return (
+                    <div key={key} onClick={() => { setSelectedWheel(w); setSelectedBet(game.betAmount); }}
+                      style={{ background:"#1e293b", borderRadius:12, padding:16, cursor:"pointer", border:`1px solid ${isAlmostFull ? "#f97316" : "#334155"}`, transition:"border 0.2s" }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <span style={{ fontWeight:700, color:w?.color, fontSize:18 }}>{w?.label}</span>
+                        <span style={{ fontSize:13, color:"#fbbf24", fontWeight:700 }}>{game.betAmount}€/ticket</span>
+                      </div>
+                      <div style={{ margin:"12px 0", background:"#0f172a", borderRadius:4, height:8 }}>
+                        <div style={{ width:`${pct}%`, background: isAlmostFull ? "#f97316" : w?.color, height:"100%", borderRadius:4, transition:"width 0.5s" }} />
+                      </div>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <p style={{ fontSize:12, color:"#64748b" }}>{game.filled}/{game.slots} joueurs</p>
+                        {isAlmostFull && <span style={{ fontSize:11, color:"#f97316", fontWeight:700 }}>🔥 Presque plein!</span>}
+                      </div>
+                      <div style={{ marginTop:8 }}>
+                        {game.participants?.slice(0, 5).map((p, i) => (
+                          <span key={i} style={{ display:"inline-block", background:"#334155", borderRadius:4, padding:"2px 6px", fontSize:11, marginRight:4, marginBottom:4, color:"#94a3b8" }}>
+                            {p.pseudo}
+                          </span>
+                        ))}
+                        {(game.participants?.length || 0) > 5 && <span style={{ fontSize:11, color:"#475569" }}>+{game.participants.length - 5}</span>}
+                      </div>
+                      <button style={{ ...btnPrimStyle, width:"100%", marginTop:12, padding:"8px 0", fontSize:13 }}>
+                        Rejoindre — {placesLeft} place{placesLeft > 1 ? "s" : ""} restante{placesLeft > 1 ? "s" : ""}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* WALLET */}
+        {page === "wallet" && (
+          <div style={{ maxWidth:600 }}>
+            <h2 style={{ marginBottom:24 }}>💰 Portefeuille</h2>
+            <div style={{ background:"#1e293b", borderRadius:16, padding:24, marginBottom:24, textAlign:"center" }}>
+              <p style={{ color:"#64748b", marginBottom:4 }}>Solde actuel</p>
+              <p style={{ fontSize:48, fontWeight:800, color:"#22c55e" }}>{(user?.balance || 0).toFixed(2)}€</p>
+            </div>
+            <h3 style={{ color:"#94a3b8", fontSize:13, textTransform:"uppercase", letterSpacing:2, marginBottom:12 }}>
+              Historique
+            </h3>
+            {history.length === 0 ? (
+              <p style={{ color:"#475569" }}>Aucune transaction</p>
+            ) : history.map((tx, i) => (
+              <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"12px 16px", background:"#1e293b", borderRadius:8, marginBottom:8 }}>
+                <span style={{ color:"#94a3b8", fontSize:13 }}>{tx.description}</span>
+                <span style={{ fontWeight:700, color: tx.amount > 0 ? "#22c55e" : "#ef4444" }}>
+                  {tx.amount > 0 ? "+" : ""}{tx.amount.toFixed(2)}€
+                </span>
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* CHAT */}
-      {screen === "chat" && (
-        <div style={{ maxWidth: 700, margin: "0 auto", padding: "32px 16px" }}>
-          <h2 style={{ fontWeight: 800, fontSize: 24, marginBottom: 16 }}>Chat Global 💬</h2>
-          <div style={{ ...styles.card, display: "flex", flexDirection: "column", height: 460 }}>
-            <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, paddingRight: 4 }}>
-              {chatMessages.map(m => (
-                <div key={m.id} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                  <div style={{ width: 30, height: 30, borderRadius: "50%", background: m.from === "System" ? "#e2e8f0" : "#6366f1", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: m.from === "System" ? "#64748b" : "#fff", fontSize: 12, fontWeight: 700 }}>
-                    {m.from[0]}
-                  </div>
-                  <div>
-                    <span style={{ fontWeight: 700, fontSize: 13, color: m.from === currentUser.pseudo ? "#6366f1" : "#0f172a" }}>{m.from}</span>
-                    <span style={{ color: "#94a3b8", fontSize: 11, marginLeft: 6 }}>{new Date(m.ts).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span>
-                    <div style={{ fontSize: 14, marginTop: 2 }}>{m.text}</div>
-                  </div>
+        {/* FRIENDS */}
+        {page === "friends" && (
+          <div style={{ maxWidth:500 }}>
+            <h2 style={{ marginBottom:24 }}>👥 Amis</h2>
+            <div style={{ display:"flex", gap:8, marginBottom:16 }}>
+              <input value={friendInput} onChange={e => setFriendInput(e.target.value)}
+                placeholder="Pseudo de l'ami" style={{ ...inputStyle, flex:1 }} />
+              <button onClick={addFriend} style={btnPrimStyle}>Ajouter</button>
+            </div>
+            {friendMsg && <p style={{ color:"#22c55e", fontSize:13, marginBottom:12 }}>{friendMsg}</p>}
+            {friends.length === 0 ? (
+              <p style={{ color:"#475569" }}>Aucun ami pour l'instant</p>
+            ) : friends.map((f, i) => (
+              <div key={i} style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 16px", background:"#1e293b", borderRadius:8, marginBottom:8 }}>
+                <div style={{ width:36, height:36, borderRadius:"50%", background:"#6366f1", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700 }}>
+                  {f.pseudo[0].toUpperCase()}
+                </div>
+                <span style={{ fontWeight:600 }}>{f.pseudo}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* CHAT */}
+        {page === "chat" && (
+          <div style={{ maxWidth:600 }}>
+            <h2 style={{ marginBottom:16 }}>💬 Chat Global</h2>
+            <div style={{ background:"#1e293b", borderRadius:12, padding:16, height:400, overflowY:"auto", marginBottom:12 }}>
+              {chatMessages.length === 0 && <p style={{ color:"#475569" }}>Aucun message</p>}
+              {chatMessages.map((m, i) => (
+                <div key={i} style={{ marginBottom:10 }}>
+                  <span style={{ color:"#6366f1", fontWeight:700, fontSize:13 }}>{m.from}</span>
+                  <span style={{ color:"#64748b", fontSize:11, marginLeft:8 }}>{new Date(m.ts).toLocaleTimeString()}</span>
+                  <p style={{ color:"#e2e8f0", margin:"2px 0 0", fontSize:14 }}>{m.text}</p>
                 </div>
               ))}
               <div ref={chatEndRef} />
             </div>
-            <div style={{ display: "flex", gap: 10, marginTop: 16, paddingTop: 12, borderTop: "1px solid #f1f5f9" }}>
-              <input style={{ ...styles.input }} placeholder="Ton message..." value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendChat()} />
-              <button style={styles.btn} onClick={sendChat}>Envoyer</button>
+            <div style={{ display:"flex", gap:8 }}>
+              <input value={chatInput} onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && sendChat()}
+                placeholder="Votre message..." style={{ ...inputStyle, flex:1 }} />
+              <button onClick={sendChat} style={btnPrimStyle}>Envoyer</button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
+
+// ─── STYLES ──────────────────────────────────────────────────────────────────
+const inputStyle = {
+  width:"100%", padding:"10px 14px", background:"#0f172a", border:"1px solid #334155",
+  borderRadius:8, color:"#f1f5f9", fontSize:15, boxSizing:"border-box", outline:"none",
+};
+const navStyle = {
+  background:"#1e293b", borderBottom:"1px solid #334155", padding:"12px 24px",
+  display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8,
+};
+const btnPrimStyle = {
+  padding:"10px 20px", background:"linear-gradient(135deg,#6366f1,#8b5cf6)",
+  border:"none", borderRadius:8, color:"#fff", fontWeight:700, cursor:"pointer", fontSize:14,
+};
+const btnSecStyle = {
+  padding:"8px 16px", background:"transparent", border:"1px solid #334155",
+  borderRadius:8, color:"#94a3b8", cursor:"pointer", fontSize:13,
+};
