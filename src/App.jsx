@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 // ─── CONFIG BACKEND ────────────────────────────────────────────────────────────
-const API_URL = "https://spinning-backend-production.up.railway.app";
-const SOCKET_URL = "https://spinning-backend-production.up.railway.app";
+const API_URL = "https://spinning-backend-ewcw.onrender.com";
+const SOCKET_URL = "https://spinning-backend-ewcw.onrender.com";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 const WHEEL_CONFIGS = [
