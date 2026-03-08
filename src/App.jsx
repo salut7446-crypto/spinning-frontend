@@ -147,7 +147,7 @@ export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem("spinning_token") || null);
   const [user, setUser] = useState(() => { try { return JSON.parse(localStorage.getItem("spinning_user")); } catch { return null; } });
   const [authMode, setAuthMode] = useState("login");
-  const [authForm, setAuthForm] = useState({ pseudo: "DemoUser", password: "demo123" });
+  const [authForm, setAuthForm] = useState({ pseudo: "", password: "" });
   const [authError, setAuthError] = useState("");
 
   // Navigation
@@ -247,8 +247,15 @@ export default function App() {
 
   // ─── AUTH ────────────────────────────────────────────────────────────────────
   async function handleAuth(e) {
-    e.preventDefault();
+    if (e?.preventDefault) e.preventDefault();
     setAuthError("");
+    if (!authForm.pseudo?.trim() || !authForm.password?.trim()) {
+      return setAuthError("Pseudo et mot de passe requis");
+    }
+    if (authMode === "register") {
+      if (authForm.password.length < 6) return setAuthError("Mot de passe trop court (6 caractères min)");
+      if (authForm.password !== authForm.confirm) return setAuthError("Les mots de passe ne correspondent pas");
+    }
     try {
       const data = await api(`/auth/${authMode}`, "POST", authForm);
       setToken(data.token);
@@ -318,7 +325,7 @@ export default function App() {
 
         <div style={{ display:"flex", marginBottom:20, background:"#0f172a", borderRadius:8, padding:4 }}>
           {["login","register"].map(m => (
-            <button key={m} onClick={() => setAuthMode(m)} style={{
+            <button key={m} onClick={() => { setAuthMode(m); setAuthForm({ pseudo: "", password: "", confirm: "" }); setAuthError(""); }} style={{
               flex:1, padding:"8px 0", border:"none", borderRadius:6, cursor:"pointer",
               background: authMode===m ? "#6366f1" : "transparent",
               color: authMode===m ? "#fff" : "#64748b", fontWeight:600, fontSize:13
@@ -326,22 +333,33 @@ export default function App() {
           ))}
         </div>
 
-        <form onSubmit={handleAuth}>
+        <div>
           <input value={authForm.pseudo} onChange={e => setAuthForm(f => ({...f, pseudo: e.target.value}))}
-            placeholder="Pseudo" style={inputStyle} />
+            placeholder="Pseudo" style={inputStyle}
+            onKeyDown={e => e.key === "Enter" && handleAuth(e)} />
           <input value={authForm.password} onChange={e => setAuthForm(f => ({...f, password: e.target.value}))}
-            type="password" placeholder="Mot de passe" style={{...inputStyle, marginTop:10}} />
+            type="password" placeholder="Mot de passe" style={{...inputStyle, marginTop:10}}
+            onKeyDown={e => e.key === "Enter" && handleAuth(e)} />
+          {authMode === "register" && (
+            <input value={authForm.confirm || ""} onChange={e => setAuthForm(f => ({...f, confirm: e.target.value}))}
+              type="password" placeholder="Confirmer le mot de passe" style={{...inputStyle, marginTop:10,
+                borderColor: authForm.confirm && authForm.confirm !== authForm.password ? "#ef4444" : authForm.confirm && authForm.confirm === authForm.password ? "#22c55e" : "#334155"
+              }}
+              onKeyDown={e => e.key === "Enter" && handleAuth(e)} />
+          )}
+          {authMode === "register" && authForm.confirm && authForm.confirm !== authForm.password && (
+            <p style={{ color:"#ef4444", fontSize:12, marginTop:6 }}>❌ Les mots de passe ne correspondent pas</p>
+          )}
+          {authMode === "register" && authForm.confirm && authForm.confirm === authForm.password && (
+            <p style={{ color:"#22c55e", fontSize:12, marginTop:6 }}>✅ Mots de passe identiques</p>
+          )}
           {authError && <p style={{ color:"#ef4444", fontSize:13, marginTop:8 }}>{authError}</p>}
-          <button type="submit" style={{
+          <button onClick={handleAuth} style={{
             width:"100%", marginTop:16, padding:"12px 0", border:"none", borderRadius:8,
             background:"linear-gradient(135deg,#6366f1,#8b5cf6)", color:"#fff",
             fontWeight:700, fontSize:15, cursor:"pointer"
           }}>{authMode === "login" ? "Se connecter" : "S'inscrire"}</button>
-        </form>
-
-        <p style={{ color:"#475569", fontSize:12, textAlign:"center", marginTop:16 }}>
-          Démo : DemoUser / demo123
-        </p>
+        </div>
       </div>
     </div>
   );
